@@ -28,6 +28,24 @@ jobs:
       - name: Check formatting
         run: cargo fmt -- --check
 
+  clippy:
+    name: Clippy deny warnings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run clippy with denied warnings
+        run: cargo clippy --all-targets -- -D warnings
+
   abi-consistency:
     name: Error codes and event topics
     runs-on: ubuntu-latest
