@@ -2922,3 +2922,68 @@ mod pending_reverify_tests {
         });
     }
 }
+
+// ── Migration idempotency (Issue #641) ──────────────────────────────────────
+
+#[cfg(test)]
+mod migration_idempotency_tests {
+    use super::*;
+    use crate::TrustBridgeContract;
+    use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
+
+    fn setup(env: &Env) -> Address {
+        let contract_id = env.register(TrustBridgeContract, ());
+        env.mock_all_auths();
+        env.as_contract(&contract_id, || {
+            TrustBridgeContract::initialize(env.clone(), Address::generate(env)).unwrap();
+        });
+        contract_id
+    }
+
+    fn name(env: &Env, s: &str) -> String {
+        String::from_str(env, s)
+    }
+
+    #[test]
+    fn test_run_migration_steps_is_idempotent() {
+        let env = Env::default();
+        let contract_id = setup(&env);
+        let owner = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            let username = name(&env, "octocat");
+            TrustBridgeContract::register(
+                env.clone(),
+                username.clone(),
+                owner.clone(),
+                Vec::new(&env),
+            )
+            .unwrap();
+            // Start at v1.0.0 so the NormalizeRegisteredAt step applies.
+            set_version(&env, (1, 0, 0));
+        });
+
+        // First application closes the gap.
+        env.as_contract(&contract_id, || {
+            let applied = run_migration_steps(&env, (1, 0, 0), (1, 1, 0));
+            assert_eq!(applied, 1, "first run should apply one step");
+            let record = get_record(&env, &name(&env, "octocat")).expect("record intact");
+            assert_eq!(record.stellar_address, owner);
+        });
+
+        // Second application with the same gap must not double-apply
+        // destructive transforms — re-saving identical records is idempotent.
+        env.as_contract(&contract_id, || {
+            let applied = run_migration_steps(&env, (1, 0, 0), (1, 1, 0));
+            assert_eq!(applied, 1, "second run re-applies but does not double-apply");
+            let record = get_record(&env, &name(&env, "octocat")).expect("record intact");
+            assert_eq!(record.stellar_address, owner);
+        });
+
+        // No steps apply when current already meets target.
+        env.as_contract(&contract_id, || {
+            let applied = run_migration_steps(&env, (1, 1, 0), (1, 1, 0));
+            assert_eq!(applied, 0, "no steps when current == target");
+        });
+    }
+}
